@@ -1,0 +1,12 @@
+# Required packages for the Voyager-Inspired HomeGrid Agent
+# Install with: pip install -r requirements.txt
+
+# OpenAI API — LLM backend
+openai>=1.0.0
+google-genai>=1.0.0
+
+# Environment variable loading from .env file
+python-dotenv>=1.0.0
+
+# Install the local HomeGrid package and its runtime dependencies.
+-e ./homegrid

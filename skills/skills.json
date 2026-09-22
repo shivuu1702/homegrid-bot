@@ -1,0 +1,120 @@
+{
+  "skills": [
+    {
+      "name": "find_recycling_bin",
+      "description": "Solved: find the recycling bin",
+      "task_type": "find",
+      "success_count": 2,
+      "last_used_for": "find"
+    },
+    {
+      "name": "get_fruit",
+      "description": "Solved: get the fruit",
+      "task_type": "get",
+      "success_count": 4,
+      "last_used_for": "get"
+    },
+    {
+      "name": "find_fruit",
+      "description": "Solved: find the fruit",
+      "task_type": "find",
+      "success_count": 2,
+      "last_used_for": "find"
+    },
+    {
+      "name": "open_trash_bin",
+      "description": "Solved: open the trash bin",
+      "task_type": "open",
+      "success_count": 3,
+      "last_used_for": "open"
+    },
+    {
+      "name": "get_plates",
+      "description": "Solved: get the plates",
+      "task_type": "get",
+      "success_count": 2,
+      "last_used_for": "get"
+    },
+    {
+      "name": "find_trash_bin",
+      "description": "Solved: find the trash bin",
+      "task_type": "find",
+      "success_count": 1
+    },
+    {
+      "name": "get_papers",
+      "description": "Solved: get the papers",
+      "task_type": "get",
+      "success_count": 1
+    },
+    {
+      "name": "open_compost_bin",
+      "description": "Solved: open the compost bin",
+      "task_type": "open",
+      "success_count": 3,
+      "last_used_for": "open"
+    },
+    {
+      "name": "move_bottle_to_living_room",
+      "description": "Solved: move the bottle to the living room",
+      "task_type": "rearrange",
+      "success_count": 2,
+      "last_used_for": "rearrange"
+    },
+    {
+      "name": "find_papers",
+      "description": "Solved: find the papers",
+      "task_type": "find",
+      "success_count": 3,
+      "last_used_for": "find"
+    },
+    {
+      "name": "move_papers_to_kitchen",
+      "description": "Solved: move the papers to the kitchen",
+      "task_type": "rearrange",
+      "success_count": 1
+    },
+    {
+      "name": "get_bottle",
+      "description": "Solved: get the bottle",
+      "task_type": "get",
+      "success_count": 1
+    },
+    {
+      "name": "put_papers_in_recycling_bin",
+      "description": "Solved: put the papers in the recycling bin",
+      "task_type": "cleanup",
+      "success_count": 1
+    },
+    {
+      "name": "put_plates_in_trash_bin",
+      "description": "Solved: put the plates in the trash bin",
+      "task_type": "cleanup",
+      "success_count": 1
+    },
+    {
+      "name": "find_compost_bin",
+      "description": "Solved: find the compost bin",
+      "task_type": "find",
+      "success_count": 1
+    },
+    {
+      "name": "open_recycling_bin",
+      "description": "Solved: open the recycling bin",
+      "task_type": "open",
+      "success_count": 1
+    },
+    {
+      "name": "put_bottle_in_recycling_bin",
+      "description": "Solved: put the bottle in the recycling bin",
+      "task_type": "cleanup",
+      "success_count": 1
+    },
+    {
+      "name": "move_papers_to_dining_room",
+      "description": "Solved: move the papers to the dining room",
+      "task_type": "rearrange",
+      "success_count": 1
+    }
+  ]
+}
