@@ -74,4 +74,4 @@ SKILLS_FILE = PROJECT_ROOT / "skills" / "skills.json"
 LOGS_DIR = PROJECT_ROOT / "logs"
 
 # Visual rendering delay (seconds) between actions — set via .env or default.
-HOMEGRID_RENDER_DELAY = float(os.getenv("HOMEGRID_RENDER_DELAY", "0.15"))
+HOMEGRID_RENDER_DELAY = float(os.getenv("HOMEGRID_RENDER_DELAY", "0.55"))

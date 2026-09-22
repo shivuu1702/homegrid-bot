@@ -103,6 +103,10 @@ def main():
     parser = argparse.ArgumentParser(description="Voyager-inspired HomeGrid Agent")
     parser.add_argument("--visual", action="store_true",
                         help="Open a HomeGrid window to watch the agent in real-time")
+    parser.add_argument("--demo", action="store_true",
+                        help="Run a single reliable demo task (cleanup) instead of full curriculum")
+    parser.add_argument("--task", type=str, default=None,
+                        help='Run a specific task, e.g. --task "put the fruit in the recycling bin"')
     args = parser.parse_args()
 
     logger, log_file = setup_logger()
@@ -116,6 +120,12 @@ def main():
     log(f"  LLM Model    : {LLM_MODEL}")
     log(f"  Log file     : {log_file}")
     log(f"  Skills       : {LOGS_DIR.parent / 'skills' / 'skills.json'}")
+    if args.demo:
+        log(f"  Mode         : DEMO (single cleanup task)")
+    elif args.task:
+        log(f"  Mode         : SINGLE TASK")
+    else:
+        log(f"  Mode         : CURRICULUM ({len(CURRICULUM_TASK_TYPES)} task types)")
     log("=" * 60)
 
     # ── LLM configuration validation (before anything else) ──────────────────
@@ -158,6 +168,53 @@ def main():
         for s in library["skills"]:
             log(f"  - {s['name']} (used {s['success_count']} time(s))")
     log("")
+
+    # ── Demo / Single-Task Mode ──────────────────────────────────────────────
+    if args.demo or args.task:
+        if args.demo:
+            target_task = "put the fruit in the recycling bin"
+            log(f"[Demo] Target task: {target_task}")
+        else:
+            target_task = args.task
+            log(f"[Task] Target task: {target_task}")
+
+        # Reset until we get a matching task (or use whatever we get)
+        task_prefix = target_task.split()[0].lower()  # e.g. "put", "find"
+        matched = False
+        for _ in range(30):
+            obs, info = env.reset()
+            if env.task.lower() == target_task.lower():
+                matched = True
+                break
+        if not matched:
+            # Try prefix match as fallback
+            for _ in range(20):
+                obs, info = env.reset()
+                if env.task.lower().startswith(task_prefix):
+                    matched = True
+                    break
+        if not matched:
+            obs, info = env.reset()
+            log(f"[Warning] Could not get exact task; using: {env.task}")
+        else:
+            log(f"[Agent] Got task: {env.task}")
+
+        result = run_task(env, log=log)
+
+        # Show result
+        library = load_skills()
+        log(f"\n[Library] Skills saved: {len(library['skills'])}")
+        for s in library["skills"]:
+            log(f"  [saved] {s['name']} (success_count={s['success_count']})")
+
+        log(f"\n{'='*60}")
+        status = "[OK]" if result["success"] else "[FAIL]"
+        log(f"  {status} | attempts={result['attempts']} | {result['task']}")
+        log(f"  Full log saved to: {log_file}")
+        log(f"{'='*60}")
+
+        env.close()
+        return
 
     # ── Curriculum Loop ──────────────────────────────────────────────────────
     results = []

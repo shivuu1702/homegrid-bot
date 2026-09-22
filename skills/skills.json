@@ -4,7 +4,7 @@
       "name": "find_recycling_bin",
       "description": "Solved: find the recycling bin",
       "task_type": "find",
-      "success_count": 2,
+      "success_count": 3,
       "last_used_for": "find"
     },
     {
@@ -32,7 +32,7 @@
       "name": "get_plates",
       "description": "Solved: get the plates",
       "task_type": "get",
-      "success_count": 2,
+      "success_count": 3,
       "last_used_for": "get"
     },
     {
@@ -51,7 +51,7 @@
       "name": "open_compost_bin",
       "description": "Solved: open the compost bin",
       "task_type": "open",
-      "success_count": 3,
+      "success_count": 4,
       "last_used_for": "open"
     },
     {
@@ -113,6 +113,24 @@
     {
       "name": "move_papers_to_dining_room",
       "description": "Solved: move the papers to the dining room",
+      "task_type": "rearrange",
+      "success_count": 1
+    },
+    {
+      "name": "put_fruit_in_recycling_bin",
+      "description": "Solved: put the fruit in the recycling bin",
+      "task_type": "cleanup",
+      "success_count": 1
+    },
+    {
+      "name": "put_bottle_in_trash_bin",
+      "description": "Solved: put the bottle in the trash bin",
+      "task_type": "cleanup",
+      "success_count": 1
+    },
+    {
+      "name": "move_fruit_to_dining_room",
+      "description": "Solved: move the fruit to the dining room",
       "task_type": "rearrange",
       "success_count": 1
     }

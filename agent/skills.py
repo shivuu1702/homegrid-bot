@@ -344,6 +344,22 @@ def skill_put_in_bin(env, obj_name, bin_name, log=print):
     if not reached:
         return False, total_steps
 
+    # Re-check bin is still open (bins auto-close after a timeout)
+    state = env.unwrapped.get_full_symbolic_state()
+    bin_info = _get_object_info(state, bin_name)
+    if bin_info and bin_info.get("state") != "open":
+        log(f"  [skill] {bin_name} closed while navigating - reopening")
+        ok, s = skill_open_bin(env, bin_name, log)
+        total_steps += s
+        if not ok:
+            log(f"  [skill] Failed to reopen {bin_name}")
+            return False, total_steps
+        # Re-navigate after reopening (may have moved)
+        steps, reached = navigate_to(env, bin_name, log)
+        total_steps += steps
+        if not reached:
+            return False, total_steps
+
     obs, reward, terminated, truncated, info = env.step(DROP)
     total_steps += 1
 
@@ -354,12 +370,7 @@ def skill_put_in_bin(env, obj_name, bin_name, log=print):
         log(f"  [skill] {obj_name} successfully placed in {bin_name}")
         return True, total_steps
 
-    # Also count as success if we're no longer carrying it and reward > 0
-    if state["agent"]["carrying"] is None:
-        log(f"  [skill] Dropped {obj_name} (not carrying anymore)")
-        return True, total_steps
-
-    log(f"  [skill] Drop failed — still carrying: {state['agent']['carrying']}")
+    log(f"  [skill] Drop failed - {obj_name} not found in {bin_name}")
     return False, total_steps
 
 

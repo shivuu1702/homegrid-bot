@@ -22,7 +22,7 @@ from skills import (
     list_available_primitive_skills,
     save_skill,
 )
-from config import MAX_RETRIES
+from config import MAX_RETRIES, MAX_STEPS_PER_RUN
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -237,6 +237,11 @@ def execute_plan(env, plan: list, task: Optional[str] = None, log=print) -> tupl
         if not success:
             return False, total_reward, f"Skill '{skill_name}' failed to complete"
 
+        # Enforce MAX_STEPS_PER_RUN to prevent runaway execution
+        if total_steps >= MAX_STEPS_PER_RUN:
+            log(f"[Agent] Step limit reached ({total_steps}/{MAX_STEPS_PER_RUN}). Stopping execution.")
+            return False, total_reward, f"Step limit reached ({total_steps} steps)"
+
     if task is not None:
         final_state = env.unwrapped.get_full_symbolic_state()
         if not task_is_complete(task, final_state):
@@ -266,7 +271,9 @@ def run_task(env, log=print) -> dict:
     success = False
 
     for attempt in range(1, MAX_RETRIES + 2):  # +2 because range is exclusive
-        log(f"\n[Agent] Attempt {attempt}/{MAX_RETRIES + 1}")
+        log(f"\n{'-'*40}")
+        log(f"[Agent] Attempt {attempt}/{MAX_RETRIES + 1}")
+        log(f"{'-'*40}")
 
         # Plan
         try:
@@ -276,6 +283,7 @@ def run_task(env, log=print) -> dict:
                 # If no plan exists, the previous failure happened during LLM
                 # planning, so retry normal planning instead of self-correction.
                 if plan is None:
+                    log(f"[Agent] Previous attempt had no valid plan - requesting fresh plan")
                     plan = plan_task(task, state, log)
                 else:
                     # Self-correction: send the failed plan and error info back to LLM.
@@ -287,6 +295,8 @@ def run_task(env, log=print) -> dict:
             plan = None
             error_msg = f"LLM unavailable: {exc}"
             log(f"[Agent] {error_msg}")
+            if attempt <= MAX_RETRIES:
+                log(f"[Agent] Retrying...")
             continue
 
         if not plan:
@@ -299,8 +309,7 @@ def run_task(env, log=print) -> dict:
         # Execute
         success, reward, error_msg = execute_plan(env, plan, task, log)
 
-        # Check actual reward from environment
-        # (MultitaskWrapper gives reward=1 on task completion)
+        # Re-read state after execution (environment may have changed)
         state = env.unwrapped.get_full_symbolic_state()
 
         if success:
