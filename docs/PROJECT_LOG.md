@@ -32,7 +32,7 @@
 | Multi-provider LLM abstraction | ✅ Implemented | Adapter pattern: Gemini native + OpenAI-compatible |
 | Embedding-based skill retrieval | ❌ Not implemented | Currently uses keyword matching |
 | LLM-generated code skills | ❌ Not implemented | Skills are pre-built Python functions |
-| Formal benchmark / evaluation | ❌ Not implemented | No systematic success-rate measurement yet |
+| Formal benchmark / evaluation | ✅ Defined (not yet executed) | 10-task fixed benchmark in `docs/HOMEGRID_BENCHMARK.md` |
 
 ---
 
@@ -211,6 +211,47 @@ homegrid/ — External environment (do not modify)
 - ❌ No dependency installation or code changes
 - ❌ No refactoring or feature development
 
+### 2026-10-28 — Fixed HomeGrid Benchmark creation
+
+**What was done:**
+- Inspected git state: clean working tree on `main` at `dedafe9`, 1 commit ahead of `origin/main`
+- Reviewed all agent source files (`agent/agent.py`, `agent/skills.py`, `agent/config.py`, `agent/main.py`, `agent/llm.py`), project docs (`PROJECT_NOTES.md`, `PROJECT_LOG.md`, `AGENTS.md`), and the skill library (`skills/skills.json`, 30 entries)
+- Examined HomeGrid environment internals (`homegrid/layout.py`, `homegrid/language_wrappers.py`) to confirm exact task formats, object/bin/room names, reward conditions, and action space
+- Designed a fixed benchmark of **10 tasks** covering all 5 supported task types:
+  - 2 × find (BM-01, BM-02)
+  - 2 × get (BM-03, BM-04)
+  - 2 × open (BM-05, BM-06)
+  - 2 × cleanup (BM-07, BM-08)
+  - 2 × rearrange (BM-09, BM-10)
+- Each task documented with: unique ID, exact natural-language input, preconditions, expected plan, expected outcome, objective pass/fail criterion, difficulty level, known risks
+- Tasks use exact strings from `MultitaskWrapper.sample_task()` format, runnable via `python agent/main.py --task "..."`
+- Created `docs/HOMEGRID_BENCHMARK.md` (v1.0)
+- Updated status table in `docs/PROJECT_LOG.md` to reflect benchmark existence
+- Updated this chronological log
+
+**Files created:**
+- `docs/HOMEGRID_BENCHMARK.md` — 10-task fixed benchmark
+
+**Files modified:**
+- `docs/PROJECT_LOG.md` — Updated status, chronology, and next steps
+
+**What was NOT done:**
+- ❌ No benchmark tasks were executed (no experiments run)
+- ❌ No agent code, prompts, skills, or configuration were modified
+- ❌ No dependencies installed
+- ❌ No statistical pass rates computed — benchmark is defined but unexecuted
+
+**Unverified items (marked in benchmark):**
+- Whether `find_object` works for bins (evidence: `find_compost_bin` has 3 successes in skills.json)
+- Whether `move_to_room` handles objects already in the target room gracefully
+- Whether `--task` matching reliably finds rearrange tasks (may require many resets)
+
+**Design decisions:**
+- 10 tasks chosen (2 per type) to balance coverage vs. execution cost
+- Difficulty graded 🟢 Easy → 🟡 Medium → 🔴 Hard, matching single-skill to composite-skill tasks
+- All 4 pickable objects and all 3 bins used at least once for broad coverage
+- Tasks use environment-native strings to avoid format mismatch issues
+
 ---
 
 ## 9. Decisions and Rationale
@@ -233,7 +274,7 @@ homegrid/ — External environment (do not modify)
 
 3. **README_TESTING.md is partially outdated.** References only OpenAI for LLM setup. The codebase now supports Gemini, OpenRouter, and Groq. The `.env.example` is the accurate reference.
 
-4. **No systematic evaluation.** Individual runs show the agent works, but no aggregate success rates across task types have been computed. This is the natural next step.
+4. **No systematic evaluation executed.** A fixed 10-task benchmark has been defined in `docs/HOMEGRID_BENCHMARK.md`, but no runs have been performed against it. Aggregate success rates remain unknown.
 
 5. **`PROJECT_NOTES.md` references "GPT-4o-mini"** in several places but the active provider is now Gemini. The notes are still architecturally accurate but provider-specific details are stale.
 
@@ -243,12 +284,12 @@ homegrid/ — External environment (do not modify)
 
 ## 11. Next Steps
 
-1. **Run a baseline evaluation** — Execute a full curriculum run with the current Gemini configuration and record aggregate success rates across all 5 task types. This is the first step needed before any further development.
+1. **Run the fixed benchmark** — Execute all 10 tasks in `docs/HOMEGRID_BENCHMARK.md` and record pass/fail results, attempt counts, and failure modes. This is the immediate next step.
 
-2. **Back up or selectively commit experiment logs** — The 69 log files in `logs/` represent the only record of past experiments. Consider committing the `summary_*.json` files at minimum.
+2. **Automate benchmark execution** — Create a script that runs each benchmark task N times (e.g., N=5) and computes aggregate pass rates per task type.
 
-3. **Update README.md project structure** — Align the documented structure with the actual file layout.
+3. **Back up or selectively commit experiment logs** — The 69 log files in `logs/` represent the only record of past experiments. Consider committing the `summary_*.json` files at minimum.
 
-4. **Update README_TESTING.md** — Reflect multi-provider support and current `.env` conventions.
+4. **Update README.md project structure** — Align the documented structure with the actual file layout.
 
-5. **Design a formal benchmark** — Define a repeatable evaluation protocol: number of runs, task distribution, success criteria, and output format.
+5. **Update README_TESTING.md** — Reflect multi-provider support and current `.env` conventions.
