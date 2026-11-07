@@ -38,7 +38,7 @@ def validate_llm_config(config: LLMConfig = LLM) -> LLMConfig:
         raise LLMConfigurationError(
             f"Unsupported LLM_PROVIDER '{config.provider}'. Supported providers: {supported}."
         )
-    if not config.api_key:
+    if not config.api_key and config.provider != "ollama":
         raise LLMConfigurationError(
             f"LLM_API_KEY is missing for provider '{config.provider}'. Set it in .env."
         )
@@ -71,7 +71,7 @@ class OpenAICompatibleAdapter(LLMAdapter):
         except ImportError as exc:
             raise LLMError("The 'openai' package is required for this provider. Run: pip install openai") from exc
 
-        kwargs = {"api_key": self.config.api_key}
+        kwargs = {"api_key": self.config.api_key or "ollama"}
         if self.config.base_url:
             kwargs["base_url"] = self.config.base_url
         try:

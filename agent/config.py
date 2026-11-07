@@ -15,10 +15,10 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 ENV_FILE = PROJECT_ROOT / ".env"
 load_dotenv(ENV_FILE)
 
-SUPPORTED_PROVIDERS = frozenset({"openai", "gemini", "openrouter", "groq"})
+SUPPORTED_PROVIDERS = frozenset({"openai", "gemini", "openrouter", "groq", "ollama"})
 # OpenRouter and Groq expose OpenAI-compatible APIs, but their endpoint must be
 # explicit so a provider switch is fully represented by the .env file.
-PROVIDERS_REQUIRING_BASE_URL = frozenset({"openrouter", "groq"})
+PROVIDERS_REQUIRING_BASE_URL = frozenset({"openrouter", "groq", "ollama"})
 
 
 @dataclass(frozen=True)

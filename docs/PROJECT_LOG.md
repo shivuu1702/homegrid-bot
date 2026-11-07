@@ -29,7 +29,7 @@
 | Demo mode (--demo) | ✅ Implemented | Single-task execution mode |
 | Logging (file + console) | ✅ Implemented | `logs/run_*.log` and `logs/summary_*.json` |
 | Unit tests | ✅ Implemented | Plan parsing, LLM failure handling, provider config |
-| Multi-provider LLM abstraction | ✅ Implemented | Adapter pattern: Gemini native + OpenAI-compatible |
+| Multi-provider LLM abstraction | ✅ Implemented | Adapter pattern: Gemini native + OpenAI-compatible + Ollama (local) |
 | Embedding-based skill retrieval | ❌ Not implemented | Currently uses keyword matching |
 | LLM-generated code skills | ❌ Not implemented | Skills are pre-built Python functions |
 | Formal benchmark / evaluation | ✅ Defined (not yet executed) | 10-task fixed benchmark in `docs/HOMEGRID_BENCHMARK.md` |
@@ -87,7 +87,7 @@ homegrid/ — External environment (do not modify)
 - `-e ./homegrid` — Local HomeGrid package (which brings `gym==0.26`, `numpy`, `matplotlib`, `tokenizers`, `sentencepiece`)
 
 **Configuration** (`.env`, template in `.env.example`):
-- `LLM_PROVIDER` — `gemini` | `openai` | `openrouter` | `groq`
+- `LLM_PROVIDER` — `gemini` | `openai` | `openrouter` | `groq` | `ollama`
 - `LLM_MODEL` — Model identifier (e.g., `gemini-2.5-flash`, `gpt-4o-mini`)
 - `LLM_API_KEY` — API key for selected provider
 - `LLM_BASE_URL` — Required for OpenRouter and Groq
@@ -282,14 +282,70 @@ homegrid/ — External environment (do not modify)
 
 ---
 
+### 2026-11-01 — Ollama / local-LLM integration
+
+**What was done:**
+- Analyzed full codebase for Ollama readiness (all 6 agent modules, config, tests, .env)
+- Determined architecture is already provider-neutral; Ollama needs only config-level changes
+- Added `"ollama"` to `SUPPORTED_PROVIDERS` and `PROVIDERS_REQUIRING_BASE_URL` in `agent/config.py`
+- Modified `validate_llm_config()` in `agent/llm.py` to skip API-key check for `provider == "ollama"`
+- Modified `OpenAICompatibleAdapter.complete()` in `agent/llm.py` to use `"ollama"` as a dummy key when `api_key` is empty (OpenAI SDK requires non-empty string)
+- Added Ollama example block to `.env.example`
+- Added 3 Ollama-specific unit tests to `test_llm_providers.py`:
+  - `test_ollama_accepted_without_api_key` — validates keyless config passes
+  - `test_ollama_selects_openai_compatible_adapter` — confirms correct adapter routing
+  - `test_ollama_requires_base_url` — verifies base_url enforcement
+- All 9 tests pass (6 existing + 3 new), 9 subtests pass
+
+**Files modified:**
+- `agent/config.py` — `SUPPORTED_PROVIDERS`, `PROVIDERS_REQUIRING_BASE_URL`
+- `agent/llm.py` — `validate_llm_config()`, `OpenAICompatibleAdapter.complete()`
+- `.env.example` — Added Ollama provider block
+- `test_llm_providers.py` — Added `OllamaProviderTests` class (3 tests)
+- `docs/PROJECT_LOG.md` — This entry
+
+**Files NOT modified (intentionally):**
+- `agent/agent.py` — Already provider-agnostic (calls only `ask_llm()`)
+- `agent/skills.py` — No LLM dependency
+- `agent/main.py` — No changes needed; uses `validate_llm_config()` and `test_llm_connection()` which now handle Ollama
+- `requirements.txt` — `openai>=1.0.0` already present; same SDK talks to Ollama
+- `.env` — User must manually switch to Ollama settings
+
+**What was NOT done:**
+- ❌ No live Ollama test executed (user must set `.env` and run `live_provider_check.py`)
+- ❌ No benchmark runs with Qwen2.5 3B
+- ❌ No prompt tuning for smaller model
+
+**Design decisions:**
+- Ollama reuses `OpenAICompatibleAdapter` since Ollama exposes `/v1/chat/completions`
+- API key set to dummy `"ollama"` string (OpenAI SDK rejects empty keys at construction)
+- Ollama added to `PROVIDERS_REQUIRING_BASE_URL` to fail fast if user forgets `LLM_BASE_URL`
+- No new adapter class created — minimal change principle
+
+**To activate Ollama**, set in `.env`:
+```
+LLM_PROVIDER=ollama
+LLM_MODEL=qwen2.5:3b
+LLM_API_KEY=
+LLM_BASE_URL=http://localhost:11434/v1
+```
+
+---
+
 ## 11. Next Steps
 
-1. **Run the fixed benchmark** — Execute all 10 tasks in `docs/HOMEGRID_BENCHMARK.md` and record pass/fail results, attempt counts, and failure modes. This is the immediate next step.
+1. **Activate Ollama and run live connection test** — Set `.env` to Ollama config and run `python live_provider_check.py` to verify end-to-end connectivity.
 
-2. **Automate benchmark execution** — Create a script that runs each benchmark task N times (e.g., N=5) and computes aggregate pass rates per task type.
+2. **Run a demo task with Ollama** — `python agent/main.py --demo` to evaluate Qwen2.5 3B plan quality on a single cleanup task.
 
-3. **Back up or selectively commit experiment logs** — The 69 log files in `logs/` represent the only record of past experiments. Consider committing the `summary_*.json` files at minimum.
+3. **Run the fixed benchmark** — Execute all 10 tasks in `docs/HOMEGRID_BENCHMARK.md` with Ollama and compare pass rates against Gemini baseline.
 
-4. **Update README.md project structure** — Align the documented structure with the actual file layout.
+4. **Tune prompts for 3B model (if needed)** — If Qwen2.5 3B produces unreliable plans, consider adding stronger formatting constraints or few-shot examples to `_build_plan_prompt()`.
 
-5. **Update README_TESTING.md** — Reflect multi-provider support and current `.env` conventions.
+5. **Automate benchmark execution** — Create a script that runs each benchmark task N times and computes aggregate pass rates per task type.
+
+6. **Back up or selectively commit experiment logs** — The log files in `logs/` represent the only record of past experiments.
+
+7. **Update README.md project structure** — Align the documented structure with the actual file layout.
+
+8. **Update README_TESTING.md** — Reflect multi-provider support including Ollama.

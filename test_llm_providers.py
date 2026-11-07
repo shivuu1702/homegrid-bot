@@ -65,5 +65,22 @@ class ProviderSelectionTests(unittest.TestCase):
                 self.assertIn("Try again", str(error))
 
 
+class OllamaProviderTests(unittest.TestCase):
+    def test_ollama_accepted_without_api_key(self):
+        config = LLMConfig("ollama", "qwen2.5:3b", "", "http://localhost:11434/v1")
+        validated = validate_llm_config(config)
+        self.assertEqual(validated.provider, "ollama")
+
+    def test_ollama_selects_openai_compatible_adapter(self):
+        config = LLMConfig("ollama", "qwen2.5:3b", "", "http://localhost:11434/v1")
+        adapter = get_provider_adapter(config)
+        self.assertIsInstance(adapter, OpenAICompatibleAdapter)
+
+    def test_ollama_requires_base_url(self):
+        config = LLMConfig("ollama", "qwen2.5:3b", "")
+        with self.assertRaisesRegex(LLMConfigurationError, "LLM_BASE_URL"):
+            validate_llm_config(config)
+
+
 if __name__ == "__main__":
     unittest.main()
