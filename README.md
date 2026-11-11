@@ -92,8 +92,8 @@ without requiring a high-end GPU.
 
 - **Python**
 - **HomeGrid / MiniGrid environment**
-- **Large Language Model (LLM)**
-- **OpenAI-compatible API**
+- **Large Language Model (LLM)** (Google Gemini `google-genai` & OpenAI `openai`)
+- **OpenAI-compatible & Native Gemini APIs**
 - **Gymnasium**
 - **dotenv**
 - **Git & GitHub**

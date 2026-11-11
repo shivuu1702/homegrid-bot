@@ -17,19 +17,24 @@ import os
 import json
 import logging
 import datetime
-import gym
-
+from pathlib import Path
+try:
+    import gym
+    import homegrid  # registers gym environments
+except ImportError:
+    gym = None
+    homegrid = None
 # Add agent/ to path so we can import our modules
 sys.path.insert(0, os.path.dirname(__file__))
-
-import homegrid  # registers gym environments
-from agent import run_task
+from agent import run_task, set_env_task, prepare_env_for_task
 from skills import load_skills
 from config import (
     ENV_ID, LOGS_DIR, CURRICULUM_TASK_TYPES,
     LLM_PROVIDER, LLM_MODEL,
+    SMDP_POLICY_FILE, SMDP_GAMMA, SMDP_ALPHA, SMDP_EPSILON,
 )
 from llm import LLMConfigurationError, validate_llm_config, test_llm_connection
+from rl_selector import LinearSMDPSkillSelector, StateFeaturizer, train_smdp
 
 
 # ── Logging Setup ──────────────────────────────────────────────────────────────
@@ -69,6 +74,10 @@ def make_env():
       - MultitaskWrapper (samples a task, gives reward on completion)
       - LanguageWrapper (streams language hints as tokens)
     """
+    if gym is None:
+        raise RuntimeError(
+            "Gym environment 'homegrid-task' requires 'gym' and local 'homegrid' packages installed."
+        )
     env = gym.make(ENV_ID, disable_env_checker=True)
     return env
 
@@ -95,7 +104,6 @@ def force_task_type(env, task_type: str, max_resets: int = 20) -> bool:
             return True
     return False  # Couldn't get the right task type
 
-
 # ── Main Agent Loop ────────────────────────────────────────────────────────────
 
 def main():
@@ -107,7 +115,24 @@ def main():
                         help="Run a single reliable demo task (cleanup) instead of full curriculum")
     parser.add_argument("--task", type=str, default=None,
                         help='Run a specific task, e.g. --task "put the fruit in the recycling bin"')
+    parser.add_argument("--mode", type=str, default="llm",
+                        choices=["llm", "rl", "hybrid", "random"],
+                        help="Action selection mode: llm (default), rl, hybrid, random")
+    parser.add_argument("--train-rl", type=int, default=None, metavar="EPISODES",
+                        help="Train Linear SMDP Q-learning selector for N episodes")
+    parser.add_argument("--policy-file", type=str, default=None,
+                        help="Path to SMDP policy weights file (default: skills/smdp_policy.json)")
     args = parser.parse_args()
+
+    policy_path = Path(args.policy_file) if args.policy_file else SMDP_POLICY_FILE
+    selector = None
+    if args.mode in ("rl", "hybrid") or args.train_rl:
+        selector = LinearSMDPSkillSelector(epsilon=SMDP_EPSILON)
+        if policy_path.exists():
+            try:
+                selector.load(policy_path)
+            except Exception as e:
+                pass
 
     logger, log_file = setup_logger()
     log = logger.info
@@ -116,38 +141,41 @@ def main():
     log("=" * 60)
     log("  Voyager-Inspired HomeGrid Agent")
     log("=" * 60)
-    log(f"  LLM Provider : {LLM_PROVIDER}")
-    log(f"  LLM Model    : {LLM_MODEL}")
+    log(f"  Agent Mode   : {args.mode.upper()}")
+    if args.mode in ("llm", "hybrid"):
+        log(f"  LLM Provider : {LLM_PROVIDER}")
+        log(f"  LLM Model    : {LLM_MODEL}")
+    if args.mode in ("rl", "hybrid") or args.train_rl:
+        log(f"  SMDP Policy  : {policy_path} (exists={policy_path.exists()})")
     log(f"  Log file     : {log_file}")
     log(f"  Skills       : {LOGS_DIR.parent / 'skills' / 'skills.json'}")
-    if args.demo:
-        log(f"  Mode         : DEMO (single cleanup task)")
+    if args.train_rl:
+        log(f"  Action       : TRAIN SMDP ({args.train_rl} episodes)")
+    elif args.demo:
+        log(f"  Run Scope    : DEMO (single cleanup task)")
     elif args.task:
-        log(f"  Mode         : SINGLE TASK")
+        log(f"  Run Scope    : SINGLE TASK")
     else:
-        log(f"  Mode         : CURRICULUM ({len(CURRICULUM_TASK_TYPES)} task types)")
+        log(f"  Run Scope    : CURRICULUM ({len(CURRICULUM_TASK_TYPES)} task types)")
     log("=" * 60)
 
-    # ── LLM configuration validation (before anything else) ──────────────────
-    # This checks provider, API key, and model BEFORE creating HomeGrid,
-    # so a misconfiguration fails fast with a clear message.
-    try:
-        validate_llm_config()
-    except LLMConfigurationError as exc:
-        log(f"[LLM ERROR] {exc}")
-        sys.exit(1)
-
-    # Optional connection test — sends a tiny prompt to verify the key works.
-    # Set LLM_SKIP_TEST=1 in .env to skip this if you want to save API quota.
-    import os
-    if os.getenv("LLM_SKIP_TEST", "").strip() not in ("1", "true", "yes"):
-        ok = test_llm_connection()
-        if not ok:
-            log("[LLM ERROR] Connection test failed. Curriculum will not start.")
-            log("  Fix the LLM configuration in .env and re-run.")
+    # ── LLM configuration validation (only needed for llm mode at startup) ───
+    if args.mode == "llm":
+        try:
+            validate_llm_config()
+        except LLMConfigurationError as exc:
+            log(f"[LLM ERROR] {exc}")
             sys.exit(1)
-    else:
-        log("[LLM] Connection test skipped (LLM_SKIP_TEST=1).")
+
+        import os
+        if os.getenv("LLM_SKIP_TEST", "").strip() not in ("1", "true", "yes"):
+            ok = test_llm_connection(log=log)
+            if not ok:
+                log("[LLM ERROR] Connection test failed. Run will not start.")
+                log("  Fix the LLM configuration in .env and re-run.")
+                sys.exit(1)
+        else:
+            log("[LLM] Connection test skipped (LLM_SKIP_TEST=1).")
     log("")
     log(f"[Agent] Creating HomeGrid environment ({ENV_ID})...")
     env = make_env()
@@ -169,6 +197,23 @@ def main():
             log(f"  - {s['name']} (used {s['success_count']} time(s))")
     log("")
 
+    # ── RL Training Mode ─────────────────────────────────────────────────────
+    if args.train_rl:
+        log(f"[SMDP] Starting training for {args.train_rl} episodes...")
+        train_smdp(
+            env,
+            selector=selector,
+            num_episodes=args.train_rl,
+            alpha=SMDP_ALPHA,
+            gamma=SMDP_GAMMA,
+            epsilon=SMDP_EPSILON,
+            policy_save_path=policy_path,
+            log=log,
+        )
+        log(f"[SMDP] Training complete. Policy saved to: {policy_path}")
+        env.close()
+        return
+
     # ── Demo / Single-Task Mode ──────────────────────────────────────────────
     if args.demo or args.task:
         if args.demo:
@@ -178,28 +223,16 @@ def main():
             target_task = args.task
             log(f"[Task] Target task: {target_task}")
 
-        # Reset until we get a matching task (or use whatever we get)
-        task_prefix = target_task.split()[0].lower()  # e.g. "put", "find"
-        matched = False
-        for _ in range(30):
-            obs, info = env.reset()
-            if env.task.lower() == target_task.lower():
-                matched = True
-                break
-        if not matched:
-            # Try prefix match as fallback
-            for _ in range(20):
-                obs, info = env.reset()
-                if env.task.lower().startswith(task_prefix):
-                    matched = True
-                    break
-        if not matched:
-            obs, info = env.reset()
-            log(f"[Warning] Could not get exact task; using: {env.task}")
-        else:
-            log(f"[Agent] Got task: {env.task}")
+        prepare_env_for_task(env, target_task, log=log)
+        log(f"[Agent] Got task: {target_task}")
 
-        result = run_task(env, log=log)
+        result = run_task(
+            env,
+            task=target_task,
+            log=log,
+            mode=args.mode,
+            selector=selector,
+        )
 
         # Show result
         library = load_skills()
@@ -209,7 +242,7 @@ def main():
 
         log(f"\n{'='*60}")
         status = "[OK]" if result["success"] else "[FAIL]"
-        log(f"  {status} | attempts={result['attempts']} | {result['task']}")
+        log(f"  {status} | attempts={result.get('attempts', 1)} | {result['task']}")
         log(f"  Full log saved to: {log_file}")
         log(f"{'='*60}")
 
@@ -235,7 +268,7 @@ def main():
             log(f"[Curriculum] Got task: {env.task}")
 
         # Run the task with the agent
-        result = run_task(env, log=log)
+        result = run_task(env, log=log, mode=args.mode, selector=selector)
         results.append(result)
 
         # Show updated skill library after each task
@@ -257,7 +290,7 @@ def main():
 
     for i, r in enumerate(results, 1):
         status = "[OK]    " if r["success"] else "[FAIL]  "
-        log(f"  [{i}] {status} | attempts={r['attempts']} | {r['task']}")
+        log(f"  [{i}] {status} | attempts={r.get('attempts', 1)} | {r['task']}")
 
     log(f"\n  Full log saved to: {log_file}")
 

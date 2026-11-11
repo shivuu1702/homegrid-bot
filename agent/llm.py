@@ -39,6 +39,10 @@ def validate_llm_config(config: LLMConfig = LLM) -> LLMConfig:
             f"Unsupported LLM_PROVIDER '{config.provider}'. Supported providers: {supported}."
         )
     if not config.api_key and config.provider != "ollama":
+        if config.provider == "gemini":
+            raise LLMConfigurationError(
+                "GEMINI_API_KEY (or LLM_API_KEY) is missing for provider 'gemini'. Set it in .env."
+            )
         raise LLMConfigurationError(
             f"LLM_API_KEY is missing for provider '{config.provider}'. Set it in .env."
         )
@@ -60,6 +64,10 @@ class LLMAdapter(ABC):
     @abstractmethod
     def complete(self, prompt: str) -> str:
         """Return the model's text response or raise ``LLMError``."""
+
+    @abstractmethod
+    def test_connection(self) -> bool:
+        """Verify connectivity to the provider endpoint or raise ``LLMError``."""
 
 
 class OpenAICompatibleAdapter(LLMAdapter):
@@ -93,11 +101,64 @@ class OpenAICompatibleAdapter(LLMAdapter):
         except Exception as exc:
             raise _normalise_provider_error(self.config.provider, exc) from exc
 
+    def test_connection(self) -> bool:
+        """Verify OpenAI-compatible endpoint connectivity."""
+        self.complete("Reply with exactly the word: OK")
+        return True
+
 
 class GeminiAdapter(LLMAdapter):
-    """Gemini's native SDK implementation, intentionally separate."""
+    """Google Gemini native SDK implementation using official google-genai."""
 
     def complete(self, prompt: str) -> str:
+        try:
+            from google import genai
+            from google.genai import types
+        except ImportError as exc:
+            raise LLMError(
+                "The 'google-genai' package is required for Gemini. "
+                "Run: pip install google-genai"
+            ) from exc
+
+        if not self.config.api_key:
+            raise LLMError(
+                "Gemini API key is missing. Set GEMINI_API_KEY (or LLM_API_KEY) in .env."
+            )
+
+        model = (self.config.model or "").strip()
+        if not model:
+            raise LLMError("GEMINI_MODEL (or LLM_MODEL) is missing. Set it in .env.")
+
+        try:
+            client = genai.Client(api_key=self.config.api_key)
+            config = types.GenerateContentConfig(
+                system_instruction=_SYSTEM_PROMPT,
+                temperature=0.2,
+                max_output_tokens=400,
+            )
+            response = client.models.generate_content(
+                model=model,
+                contents=prompt,
+                config=config,
+            )
+        except LLMError:
+            raise
+        except Exception as exc:
+            raise _normalise_provider_error("gemini", exc) from exc
+
+        # Extract generated text safely
+        try:
+            text = getattr(response, "text", None)
+        except Exception:
+            text = None
+
+        if not text or not text.strip():
+            raise LLMError("Provider returned an empty response.")
+
+        return text.strip()
+
+    def test_connection(self) -> bool:
+        """Dedicated Gemini connection check using google.genai.Client and generate_content."""
         try:
             from google import genai
         except ImportError as exc:
@@ -106,24 +167,39 @@ class GeminiAdapter(LLMAdapter):
                 "Run: pip install google-genai"
             ) from exc
 
-        try:
-            client = genai.Client(api_key=self.config.api_key)
-
-            response = client.models.generate_content(
-                model=self.config.model,
-                contents=f"{_SYSTEM_PROMPT}\n\n{prompt}",
+        if not self.config.api_key:
+            raise LLMError(
+                "GEMINI_API_KEY (or LLM_API_KEY) is missing for provider 'gemini'. Set it in .env."
             )
 
-            text = getattr(response, "text", None)
-            if not text or not text.strip():
-                raise LLMError("Provider returned an empty response.")
+        model = (self.config.model or "").strip()
+        if not model:
+            raise LLMError("GEMINI_MODEL (or LLM_MODEL) is missing. Set it in .env.")
 
-            return text.strip()
-
+        try:
+            client = genai.Client(api_key=self.config.api_key)
+            # Minimal generate_content ping without complex task-planning parameters
+            response = client.models.generate_content(
+                model=model,
+                contents="ping",
+            )
         except LLMError:
             raise
         except Exception as exc:
             raise _normalise_provider_error("gemini", exc) from exc
+
+        # Safe verification of response structure
+        text = None
+        try:
+            text = getattr(response, "text", None)
+        except Exception:
+            text = None
+
+        has_candidates = bool(getattr(response, "candidates", None))
+        if not text and not has_candidates:
+            raise LLMError("Provider returned an empty response.")
+
+        return True
 
 
 def get_provider_adapter(config: LLMConfig = LLM) -> LLMAdapter:
@@ -135,15 +211,49 @@ def get_provider_adapter(config: LLMConfig = LLM) -> LLMAdapter:
 
 
 def _normalise_provider_error(provider: str, exc: Exception) -> LLMError:
-    """Convert SDK-specific errors to one safe, recoverable application error."""
+    """Convert SDK-specific errors to one safe, recoverable application error.
+
+    Never echoes raw exception contents or URLs that might leak API keys.
+    """
     status = getattr(exc, "status_code", None)
     if status is None:
-        match = re.search(r"\b(401|403|404|408|429|500|502|503|504)\b", str(exc))
+        code_attr = getattr(exc, "code", None)
+        if isinstance(code_attr, int):
+            status = code_attr
+
+    exc_str = str(exc).upper()
+    if status is None:
+        match = re.search(r"\b(400|401|403|404|408|429|500|502|503|504)\b", exc_str)
         status = int(match.group(1)) if match else None
+
+    # Handle explicit API status names from Gemini / OpenAI if numeric status was not found
+    if status is None:
+        if "RESOURCE_EXHAUSTED" in exc_str or "RATE_LIMIT" in exc_str or "QUOTA" in exc_str:
+            status = 429
+        elif "API_KEY_INVALID" in exc_str or "INVALID_API_KEY" in exc_str:
+            status = 401
+        elif "PERMISSION_DENIED" in exc_str:
+            status = 403
+        elif "NOT_FOUND" in exc_str:
+            status = 404
+
+    key_hint = "GEMINI_API_KEY (or LLM_API_KEY)" if provider == "gemini" else "LLM_API_KEY"
+    model_hint = (
+        "GEMINI_MODEL (or LLM_MODEL)"
+        if provider == "gemini"
+        else "LLM_MODEL and LLM_BASE_URL"
+    )
+    not_found_msg = (
+        f"Model not found or unsupported for generateContent. Check {model_hint}."
+        if provider == "gemini"
+        else f"Endpoint or model not found. Check {model_hint}."
+    )
+
     messages = {
-        401: "Authentication failed. Check LLM_API_KEY.",
+        400: f"Invalid request or API key. Check {key_hint}.",
+        401: f"Authentication failed. Check {key_hint}.",
         403: "Permission denied. The key may not access this model.",
-        404: "Endpoint or model not found. Check LLM_MODEL and LLM_BASE_URL.",
+        404: not_found_msg,
         408: "Provider request timed out. Try again.",
         429: "Provider rate limit reached. Try again later.",
         500: "Provider server error. Try again later.",
@@ -164,12 +274,13 @@ def ask_llm(prompt: str) -> str:
     return get_provider_adapter().complete(prompt)
 
 
-def test_llm_connection() -> bool:
-    """Optional single-request live check for the current .env provider."""
+def test_llm_connection(config: LLMConfig = LLM, log=print) -> bool:
+    """Optional single-request live check for the configured provider."""
     try:
-        ask_llm("Reply with exactly the word: OK")
-        print("[LLM] Connection test passed.")
+        adapter = get_provider_adapter(config)
+        adapter.test_connection()
+        log("[LLM] Connection test passed.")
         return True
     except LLMError as exc:
-        print(f"[LLM ERROR] Connection test failed: {exc}")
+        log(f"[LLM ERROR] Connection test failed: {exc}")
         return False

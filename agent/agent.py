@@ -14,8 +14,8 @@ This is the Voyager pipeline, simplified for HomeGrid.
 """
 
 import re
-from typing import Optional
-from llm import LLMError, ask_llm
+from typing import Any, Dict, Optional
+from llm import LLMConfigurationError, LLMError, ask_llm, validate_llm_config
 from skills import (
     SKILL_FUNCTIONS,
     get_relevant_skills,
@@ -23,6 +23,12 @@ from skills import (
     save_skill,
 )
 from config import MAX_RETRIES, MAX_STEPS_PER_RUN
+from rl_selector import (
+    LinearSMDPSkillSelector,
+    StateFeaturizer,
+    run_smdp_episode,
+    task_is_complete as rl_task_is_complete,
+)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -168,32 +174,8 @@ def _parse_plan(response: str) -> list:
 
 
 def task_is_complete(task: str, state: dict) -> bool:
-    """Return whether *the original task* is complete in ``state``.
-
-    Primitive skills report whether their local action worked.  That is not
-    enough to establish that an LLM plan solved the assigned task (for
-    example, ``find_object(bottle)`` can succeed during ``get the fruit``).
-    The environment samples only the task forms handled below.
-    """
-    task_lower = task.lower().strip()
-    objects = {obj["name"]: obj for obj in state["objects"]}
-
-    if task_lower.startswith("find the "):
-        return state.get("front_obj") == task_lower.removeprefix("find the ")
-    if task_lower.startswith("get the "):
-        return state["agent"].get("carrying") == task_lower.removeprefix("get the ")
-    if task_lower.startswith("open the "):
-        bin_info = objects.get(task_lower.removeprefix("open the "))
-        return bool(bin_info and bin_info.get("state") == "open")
-    if task_lower.startswith("put the ") and " in the " in task_lower:
-        obj_name, bin_name = task_lower.removeprefix("put the ").split(" in the ", 1)
-        bin_info = objects.get(bin_name)
-        return bool(bin_info and obj_name in (bin_info.get("contains") or []))
-    if task_lower.startswith("move the ") and " to the " in task_lower:
-        obj_name, room_name = task_lower.removeprefix("move the ").split(" to the ", 1)
-        room_codes = {"kitchen": "K", "living room": "L", "dining room": "D"}
-        return bool(objects.get(obj_name) and objects[obj_name].get("room") == room_codes.get(room_name))
-    return False
+    """Return whether *the original task* is complete in ``state``."""
+    return rl_task_is_complete(task, state)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -250,20 +232,248 @@ def execute_plan(env, plan: list, task: Optional[str] = None, log=print) -> tupl
     return True, total_reward, ""
 
 
-def run_task(env, log=print) -> dict:
-    """
-    Run a complete task with the current environment task.
-    Implements the full Voyager loop:
-      observe → plan → execute → feedback → correct → save skill
+def _configure_multitask_wrapper(wrapper: Any, task: str) -> None:
+    """Configure MultitaskWrapper's reward_fn and dist_goal for a specific task."""
+    parsed = StateFeaturizer.parse_task(task)
+    task_type = parsed["task_type"]
+    obj_name = parsed["target_obj"]
+    bin_name = parsed["target_bin"]
+    room_name = parsed["target_room"]
 
-    Returns a result dict with keys: task, success, attempts, reward
+    room_code = {"kitchen": "K", "living room": "L", "dining room": "D"}.get(room_name)
+
+    def reward_fn(symbolic_state):
+        if not symbolic_state:
+            return 0
+        if task_type == "find":
+            return int(symbolic_state.get("front_obj") == obj_name)
+        elif task_type == "get":
+            return int(symbolic_state.get("agent", {}).get("carrying") == obj_name)
+        elif task_type == "open":
+            for o in symbolic_state.get("objects", []):
+                if o.get("name") == bin_name:
+                    return int(o.get("state") == "open")
+            return 0
+        elif task_type == "cleanup":
+            if symbolic_state.get("agent", {}).get("carrying") == obj_name:
+                return 0.5
+            for o in symbolic_state.get("objects", []):
+                if o.get("name") == bin_name:
+                    return int(obj_name in (o.get("contains") or []))
+            return 0
+        elif task_type == "rearrange":
+            if symbolic_state.get("agent", {}).get("carrying") == obj_name:
+                return 0.5
+            for o in symbolic_state.get("objects", []):
+                if o.get("name") == obj_name:
+                    return int(o.get("room") == room_code)
+            return 0
+        return 0
+
+    def dist_goal(symbolic_state):
+        if not symbolic_state:
+            return 0
+        goal_name = bin_name if (task_type == "cleanup" and symbolic_state.get("agent", {}).get("carrying") == obj_name) else obj_name
+        if not goal_name:
+            return 0
+        objs = [o for o in symbolic_state.get("objects", []) if o.get("name") == goal_name]
+        if objs and "pos" in objs[0]:
+            pos = objs[0]["pos"]
+            agent_pos = symbolic_state.get("agent", {}).get("pos") or getattr(wrapper, "agent_pos", (0, 0))
+            return abs(agent_pos[0] - pos[0]) + abs(agent_pos[1] - pos[1])
+        return 0
+
+    try:
+        wrapper.task = task
+        wrapper.reward_fn = reward_fn
+        wrapper.dist_goal = dist_goal
+        wrapper.subtask_done = False
+        wrapper.start_step = getattr(wrapper, "step_cnt", 0)
+    except Exception:
+        pass
+
+
+
+def prepare_env_for_task(env: Any, target_task: str, max_resets: int = 50, log=print) -> bool:
+    """Ensure the environment layout contains the necessary objects/bins for target_task,
+
+    and explicitly configure target_task across the environment hierarchy.
     """
-    # Get the current task from env
-    task = env.task
+    parsed = StateFeaturizer.parse_task(target_task)
+    req_obj = parsed.get("target_obj")
+    req_bin = parsed.get("target_bin")
+
+    found_state = False
+    for attempt in range(max_resets):
+        obs, info = env.reset()
+
+        state = None
+        if hasattr(env, "unwrapped") and hasattr(env.unwrapped, "get_full_symbolic_state"):
+            state = env.unwrapped.get_full_symbolic_state()
+        elif hasattr(env, "get_full_symbolic_state"):
+            state = env.get_full_symbolic_state()
+        elif isinstance(info, dict) and "symbolic_state" in info:
+            state = info["symbolic_state"]
+
+        if state is not None and "objects" in state:
+            obj_names = {o["name"] for o in state["objects"]}
+            if req_obj and req_obj not in obj_names:
+                continue
+            if req_bin and req_bin not in obj_names:
+                continue
+            found_state = True
+            break
+        else:
+            found_state = True
+            break
+
+    if not found_state:
+        log(f"[Warning] Could not confirm required objects for '{target_task}' after {max_resets} resets; continuing anyway.")
+
+    set_env_task(env, target_task)
+    return found_state
+
+
+def set_env_task(env: Any, task: str) -> None:
+    """Set the active task across the environment and its wrapper hierarchy."""
+    if not task:
+        return
+
+    try:
+        env.task = task
+    except Exception:
+        pass
+
+    curr = env
+    while curr is not None:
+        try:
+            curr.task = task
+        except Exception:
+            pass
+
+        # Protect HomeGrid LanguageWrapper from crashing on arbitrary compound task strings
+        if hasattr(curr, "cache") and hasattr(curr, "embed_cache") and isinstance(curr.cache, dict):
+            import numpy as np
+            if task not in curr.cache:
+                pad_token = curr.cache.get("<pad>", 0)
+                curr.cache[task] = [pad_token]
+            if task not in curr.embed_cache:
+                pad_embed = curr.embed_cache.get("<pad>", np.zeros(getattr(curr, "embed_size", 512), dtype=np.float32))
+                curr.embed_cache[task] = [pad_embed]
+
+        if hasattr(curr, "reward_fn") and hasattr(curr, "sample_task"):
+            _configure_multitask_wrapper(curr, task)
+
+        curr = getattr(curr, "env", None)
+
+
+def run_task(
+    env,
+    log=print,
+    mode: str = "llm",
+    selector: Optional[LinearSMDPSkillSelector] = None,
+    training: bool = False,
+    alpha: float = 0.05,
+    gamma: float = 0.95,
+    epsilon: Optional[float] = None,
+    task: Optional[str] = None,
+) -> dict:
+    """Run a complete task with the current environment task.
+
+    Supports:
+      - mode='llm': Original Voyager loop (LLM planning + self-correction)
+      - mode='rl': Direct Linear SMDP Skill Selection
+      - mode='hybrid': RL selector first; fallback to LLM planner if RL fails/unavailable
+      - mode='random': Uniform random selection among valid skills (baseline)
+    """
+    if task is not None:
+        set_env_task(env, task)
+    else:
+        task = getattr(env, "task", "")
     log(f"\n{'='*60}")
-    log(f"[Agent] Task: {task}")
+    log(f"[Agent] Task: {task} | Mode: {mode.upper()}")
     log(f"{'='*60}")
 
+    # 1. RL or Random Mode
+    if mode in ("rl", "random"):
+        result = run_smdp_episode(
+            env,
+            selector=selector,
+            task=task,
+            alpha=alpha,
+            gamma=gamma,
+            epsilon=epsilon,
+            training=training,
+            random_baseline=(mode == "random"),
+            log=log,
+        )
+        if result["success"]:
+            skill_name = _task_to_skill_name(task)
+            save_skill(skill_name, f"Solved: {task}", _infer_task_type(task))
+            log(f"[Agent] Saving skill: '{skill_name}' to library")
+        return {
+            "task": task,
+            "success": result["success"],
+            "attempts": 1,
+            "plan": result["skills_executed"],
+            "reward": result["total_reward"],
+            "steps": result["total_steps"],
+            "failed_skills": result["failed_skills"],
+            "mode": mode,
+        }
+
+    # 2. Hybrid Mode: Try RL first if selector is provided
+    if mode == "hybrid":
+        rl_res = None
+        if selector is not None:
+            log("[Agent] [Hybrid] Attempting SMDP skill selection first...")
+            rl_res = run_smdp_episode(
+                env,
+                selector=selector,
+                task=task,
+                alpha=alpha,
+                gamma=gamma,
+                epsilon=epsilon,
+                training=training,
+                log=log,
+            )
+            if rl_res["success"]:
+                log("[Agent] [Hybrid] SMDP skill selection succeeded!")
+                skill_name = _task_to_skill_name(task)
+                save_skill(skill_name, f"Solved: {task}", _infer_task_type(task))
+                return {
+                    "task": task,
+                    "success": True,
+                    "attempts": 1,
+                    "plan": rl_res["skills_executed"],
+                    "reward": rl_res["total_reward"],
+                    "steps": rl_res["total_steps"],
+                    "failed_skills": rl_res["failed_skills"],
+                    "mode": "hybrid (rl-success)",
+                }
+            log("[Agent] [Hybrid] RL attempt did not complete task; falling back to LLM planner...")
+        else:
+            log("[Agent] [Hybrid] No RL selector available; falling back to LLM planner...")
+
+        # Validate LLM configuration at fallback time
+        try:
+            validate_llm_config()
+        except LLMConfigurationError as exc:
+            error_msg = f"LLM fallback unavailable: {exc}"
+            log(f"[Agent] [Hybrid] {error_msg}")
+            return {
+                "task": task,
+                "success": False,
+                "attempts": 1,
+                "plan": rl_res["skills_executed"] if rl_res else [],
+                "reward": rl_res["total_reward"] if rl_res else 0.0,
+                "steps": rl_res["total_steps"] if rl_res else 0,
+                "failed_skills": rl_res["failed_skills"] if rl_res else 0,
+                "mode": "hybrid (llm-fallback-unavailable)",
+                "error": error_msg,
+            }
+
+    # 3. LLM Planning Loop (Default / Fallback)
     state = env.unwrapped.get_full_symbolic_state()
 
     plan = None
@@ -333,6 +543,7 @@ def run_task(env, log=print) -> dict:
         "success": success,
         "attempts": attempt,
         "plan": plan,
+        "mode": ("hybrid (llm-fallback-success)" if success else "hybrid (llm-fallback-failed)") if mode == "hybrid" else mode,
     }
 
 
