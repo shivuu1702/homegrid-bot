@@ -75,37 +75,39 @@ State keys: ['step', 'agent', 'objects', 'front_obj', 'unsafe']
 
 ## 4. LLM / API Setup
 
-### Which API is used?
-**OpenAI Chat API** — `gpt-4o-mini` (default, recommended)
+### Supported Providers
+The agent supports multiple LLM providers:
+1. **Google Gemini (Recommended / Free-Tier)** — uses the official `google-genai` SDK (`gemini-2.5-flash` by default).
+2. **OpenAI** — uses `openai` (`gpt-4o-mini` by default).
+3. **OpenRouter / Groq / Ollama** — OpenAI-compatible endpoints.
 
 ### How to get an API key
-1. Go to https://platform.openai.com/api-keys
-2. Sign in and click **"Create new secret key"**
-3. Copy the key (it starts with `sk-`)
+- **Gemini:** Go to [Google AI Studio](https://aistudio.google.com/app/apikey) and create a free API key.
+- **OpenAI:** Go to [OpenAI Platform](https://platform.openai.com/api-keys) and create a secret key.
 
-### Where to put the key
-Create a `.env` file in the **project root** (`AI-Project/.env`):
+### Configuring `.env`
+Create a `.env` file in the project root:
 
 ```bash
 # On Windows (PowerShell):
 copy .env.example .env
-# Then open .env in a text editor and add your key
 
 # On Linux/Mac:
 cp .env.example .env
 ```
 
-Edit `.env`:
-```
-OPENAI_API_KEY=sk-your-actual-key-here
-OPENAI_MODEL=gpt-4o-mini
+#### Option A: Google Gemini
+```ini
+LLM_PROVIDER=gemini
+GEMINI_MODEL=gemini-2.5-flash
+GEMINI_API_KEY=your_gemini_key_here
 ```
 
-### How to change the model
-Edit `.env` and change `OPENAI_MODEL`:
-```
-OPENAI_MODEL=gpt-4o        # more powerful, more expensive
-OPENAI_MODEL=gpt-3.5-turbo # cheaper, less reliable
+#### Option B: OpenAI
+```ini
+LLM_PROVIDER=openai
+LLM_MODEL=gpt-4o-mini
+LLM_API_KEY=your_openai_key_here
 ```
 
 ### How the LLM is used
@@ -117,12 +119,9 @@ The LLM is called **only for planning** — not for every action.
 **The LLM is never fine-tuned.** It is used as a black-box reasoner.
 
 ### What happens if the API key is missing
-The agent will print a clear error and exit:
+The agent prints a clear error and exits safely without leaking secrets:
 ```
-[ERROR] OPENAI_API_KEY is not set.
-  1. Copy .env.example to .env
-  2. Add your OpenAI API key to .env
-  3. Re-run the agent
+[LLM ERROR] GEMINI_API_KEY (or LLM_API_KEY) is missing for provider 'gemini'. Set it in .env.
 ```
 
 ---

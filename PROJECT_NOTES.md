@@ -137,7 +137,7 @@ get_relevant_skills(task)
         │  Keyword search in skills.json
         ↓
 ask_llm(prompt)
-        │  OpenAI Chat API call
+        │  Multi-provider call (Google Gemini native SDK or OpenAI)
         │  Returns ordered list of skill calls
         ↓
 _parse_plan(response)
@@ -166,7 +166,10 @@ plan_correction() ──LLM──→ new plan → retry
 
 ### `agent/config.py`
 Central configuration. All constants live here:
-- `OPENAI_MODEL` — which LLM to use
+- `LLM_PROVIDER` — which LLM provider to use (`gemini`, `openai`, `openrouter`, `groq`, `ollama`)
+- `LLM_MODEL` / `GEMINI_MODEL` / `OPENAI_MODEL` — which LLM model to use
+- `LLM_API_KEY` / `GEMINI_API_KEY` / `OPENAI_API_KEY` — API keys loaded securely from `.env`
+- `DEFAULT_GEMINI_MODEL` — default Flash model (`gemini-2.5-flash`)
 - `MAX_RETRIES` — how many times to retry a failed task
 - `MAX_NAV_STEPS` — timeout for navigation BFS
 - `CURRICULUM_TASK_TYPES` — the progression of task types
@@ -179,9 +182,9 @@ Central configuration. All constants live here:
 ### `agent/llm.py`
 The LLM interface. One function: `ask_llm(prompt) -> str`.
 
-Sends the prompt to OpenAI's Chat API with a system message that explains the agent's context (3-room house, objects, bins).
+Sends the prompt to Google Gemini (via official `google-genai` SDK) or OpenAI's Chat API with a system message explaining the agent's context (3-room house, objects, bins).
 
-Uses `temperature=0.2` for low randomness — we want consistent, structured plans.
+Uses `temperature=0.2` and `max_output_tokens=400` for low randomness — ensuring consistent, structured plans without leaking API keys in exception messages.
 
 **The LLM is never fine-tuned.** It is used as-is, off-the-shelf.
 
